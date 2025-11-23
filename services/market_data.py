@@ -2,6 +2,14 @@ import yfinance as yf
 
 class MarketDataService:
     @staticmethod
+    def _get_symbol(symbol: str) -> str:
+        """Sembolü normalize eder (.IS kontrolü)"""
+        clean_symbol = symbol.upper().strip()
+        if "." not in clean_symbol and "-" not in clean_symbol:
+            return f"{clean_symbol}.IS"
+        return clean_symbol
+    
+    @staticmethod
     def get_stock_price(symbol: str):
         """
         Verilen sembol için anlık fiyatı getirir.
@@ -40,4 +48,24 @@ class MarketDataService:
 
         except Exception as e:
             print(f"Hata oluştu ({symbol}): {e}")
+            return None
+    
+    @staticmethod
+    def get_historical_data(symbol: str, period="1mo"):
+        """
+        Analiz için geçmiş veriyi getirir.
+        RSI için en az 14 mumluk veriye ihtiyaç vardır.
+        """
+        try:
+            search_symbol = MarketDataService._get_symbol(symbol)
+            ticker = yf.Ticker(search_symbol)
+            # 1 aylık veri çekelim ki 14 günlük RSI rahat hesaplansın
+            data = ticker.history(period=period)
+            
+            if data.empty or len(data) < 14:
+                return None
+                
+            return data
+        except Exception as e:
+            print(f"Tarihçe Hatası: {e}")
             return None

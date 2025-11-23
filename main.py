@@ -3,6 +3,7 @@ import logging
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder, CommandHandler
 from handlers.commands import start, get_price_command
+from handlers.commands import start, get_price_command, analyze_command
 
 # Loglama ayarları (Hata ayıklamak için)
 logging.basicConfig(
@@ -26,6 +27,9 @@ def main():
     # Komutları ekle
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("fiyat", get_price_command))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("fiyat", get_price_command))
+    app.add_handler(CommandHandler("analiz", analyze_command))
 
     print("✅ Bot başarıyla başlatıldı! Telegram'a gidip test edebilirsin.")
     
