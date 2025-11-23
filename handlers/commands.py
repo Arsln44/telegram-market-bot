@@ -83,6 +83,10 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if analysis['divergence']['label']:
             div_msg = f"\n📢 *UYUMSUZLUK VAR:*\nSinyal: `{analysis['divergence']['label']}`\nDurum: _{analysis['divergence']['desc']}_\n"
 
+        supp = analysis['levels']['support']
+        res = analysis['levels']['resistance']
+        levels_txt = f"🛡️ Destek: `{supp}`\n🚧 Direnç: `{res}`" if supp else "Hesaplanamadı"
+
         message = (
             f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({interval})\n"
             f"💰 Fiyat: `{price_info['price']} {price_info['currency']}`\n"
@@ -90,8 +94,10 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             f"🌍 *GENEL TREND ({macro_interval}):*\n"
             f"Yön: `{analysis['mtf']['label']}`\n"
-            f"Durum: _{analysis['mtf']['desc']}_\n"
             f"{div_msg}\n"
+            
+            f"🏗️ *FİYAT YAPISI (50 Mum):*\n"
+            f"{levels_txt}\n\n"
             
             f"📐 *TEKNİK GÖSTERGELER:*\n"
             f"RSI: `{analysis['rsi']}`\n"
@@ -99,10 +105,9 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             f"📋 *DETAYLAR:*\n{details_text}\n\n"
             
-            f"🛡️ *TİCARET PLANLAMASI (ATR)*\n"
+            f"🛡️ *PLAN (ATR):*\n"
             f"🛑 Stop: `{analysis['stop_loss']}`\n"
-            f"🎯 Hedef: `{analysis['take_profit']}`\n\n"
-            f"_YTD. Bot teknik verilerle hesaplama yapar._"
+            f"🎯 Hedef: `{analysis['take_profit']}`\n"
         )
         
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)

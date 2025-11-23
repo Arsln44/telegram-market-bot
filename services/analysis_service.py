@@ -164,14 +164,13 @@ class AnalysisService:
     
     @staticmethod
     def calculate_technical_signals(df: pd.DataFrame, macro_df: pd.DataFrame = None):
-        """
-        Artık hem mevcut df hem de macro_df (üst periyot) alıyor.
-        """
         if df is None or df.empty:
             return None
 
         try:
-            # 1. Temel İndikatörler
+            # --- 1. Temel Hesaplamalar ---
+            current_price = float(df["Close"].iloc[-1])
+            
             rsi_ind = RSIIndicator(close=df["Close"], window=14)
             current_rsi = float(rsi_ind.rsi().iloc[-1])
 
@@ -183,23 +182,35 @@ class AnalysisService:
             bb_upper = float(bb.bollinger_hband().iloc[-1])
             bb_lower = float(bb.bollinger_lband().iloc[-1])
 
+            atr = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range().iloc[-1]
+            
+            # SMA 50 (Mean Reversion için)
+            sma50 = SMAIndicator(close=df["Close"], window=50).sma_indicator().iloc[-1]
+
+            # OBV
             obv_ind = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"])
             obv = obv_ind.on_balance_volume()
             obv_trend = "Nötr"
             if len(obv) >= 5:
                 obv_trend = "Artıyor 🟢" if obv.iloc[-1] > obv.iloc[-5] else "Azalıyor 🔴"
 
-            atr = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range().iloc[-1]
-
-            # 2. Yeni Özellik: DIVERGENCE Tespiti
+            # --- 2. Gelişmiş Analizler ---
+            
+            # Divergence
             div_label, div_desc = AnalysisService.detect_rsi_divergence(df)
             
-            # 3. Yeni Özellik: MTF Trend Analizi
+            # MTF Trend
             mtf_label, mtf_desc = "Yok", "-"
             if macro_df is not None:
                 mtf_label, mtf_desc = AnalysisService.calculate_mtf_trend(macro_df)
 
-            # --- PUANLAMA SİSTEMİ (Revize Edildi) ---
+            # YENİ: Destek / Direnç
+            support, resistance = AnalysisService._calculate_support_resistance(df)
+            
+            # YENİ: Ortalamadan Sapma (Mean Reversion)
+            mr_status = AnalysisService._check_mean_reversion(current_price, sma50)
+
+            # --- 3. Puanlama Motoru ---
             score = 0
             details = []
             
@@ -218,30 +229,49 @@ class AnalysisService:
             else:
                 score -= 1
             
-            # Bollinger
-            current_price = df["Close"].iloc[-1]
+            # Bollinger (Bandı delme durumu)
             if current_price < bb_lower:
                 score += 2
                 details.append("BB: Alt Bandı Deldi (Tepki Beklentisi)")
             elif current_price > bb_upper:
-                score -= 1
-            
-            # Divergence (Büyük Puan Etkisi)
+                score -= 1 # Sadece eksi yazar, detay yazmaya gerek yok
+
+            # YENİ: Destek/Direnç Yakınlığı
+            if support and resistance:
+                # Desteğe %2 yakınsa AL puanı ekle
+                if abs(current_price - support) / current_price < 0.02:
+                    score += 2
+                    details.append("YAPISAL: Güçlü Desteğe Yakın 🛡️")
+                # Dirence %2 yakınsa SAT puanı ekle
+                elif abs(current_price - resistance) / current_price < 0.02:
+                    score -= 2
+                    details.append("YAPISAL: Güçlü Dirence Yakın 🚧")
+
+            # YENİ: Mean Reversion Etkisi
+            if mr_status:
+                if "Pahalı" in mr_status:
+                    score -= 2 # Trend tersine işlem riski
+                    details.append(f"MR: {mr_status}")
+                elif "Ucuz" in mr_status:
+                    score += 2
+                    details.append(f"MR: {mr_status}")
+
+            # Divergence
             if div_label:
                 if "Yükseliş" in div_label:
-                    score += 3  # Uyumsuzluk güçlü sinyaldir
+                    score += 3
                     details.append(f"🔥 {div_label}")
                 elif "Düşüş" in div_label:
                     score -= 3
                     details.append(f"⚠️ {div_label}")
 
-            # MTF Trend Onayı (Trend yönünde isek puan artır)
+            # MTF
             if "YÜKSELİŞ" in mtf_label and score > 0:
                 score += 1
-                details.append("MTF: Büyük Resim Yükselişi Destekliyor")
+                details.append("MTF: Trend Onaylı")
             elif "DÜŞÜŞ" in mtf_label and score < 0:
                 score -= 1
-                details.append("MTF: Büyük Resim Düşüşü Destekliyor")
+                details.append("MTF: Trend Onaylı")
 
             # Etiketleme
             risk_label = "NÖTR"
@@ -259,7 +289,8 @@ class AnalysisService:
                 "stop_loss": round(current_price - 2 * atr, 4),
                 "take_profit": round(current_price + 3 * atr, 4),
                 "divergence": {"label": div_label, "desc": div_desc},
-                "mtf": {"label": mtf_label, "desc": mtf_desc}
+                "mtf": {"label": mtf_label, "desc": mtf_desc},
+                "levels": {"support": support, "resistance": resistance} # YENİ VERİ
             }
 
         except Exception as e:
@@ -307,3 +338,35 @@ class AnalysisService:
         except Exception as e:
             print(f"[analyze_market_health] Hata: {e}")
             return "Hata", "Hesaplanamadı"
+        
+    @staticmethod
+    def _calculate_support_resistance(df: pd.DataFrame):
+        """
+        Son 50 mumdaki en yüksek ve en düşük seviyeleri (Basit Destek/Direnç) bulur.
+        """
+        if len(df) < 50:
+            return None, None
+        
+        # Son 50 mumluk pencere (Güncel mum hariç)
+        subset = df.iloc[-51:-1]
+        resistance = float(subset["High"].max())
+        support = float(subset["Low"].min())
+        
+        return support, resistance
+
+    @staticmethod
+    def _check_mean_reversion(current_price, sma50):
+        """
+        Fiyatın 50 ortalamadan ne kadar uzaklaştığını ölçer.
+        Aşırı sapma varsa 'Mean Reversion' (Ortalamaya Dönüş) ihtimali artar.
+        """
+        if not sma50: return None
+        
+        diff_pct = (current_price - sma50) / sma50
+        
+        # %15'ten fazla sapma varsa uyarı (Kripto/BIST için genelleme)
+        if diff_pct > 0.15:
+            return "Aşırı Pahalı (Düzeltme Riski) ⚠️"
+        elif diff_pct < -0.15:
+            return "Aşırı Ucuz (Tepki Gelebilir) 🛒"
+        return None
