@@ -85,7 +85,18 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         supp = analysis['levels']['support']
         res = analysis['levels']['resistance']
+        if supp: supp = round(supp, 2)
+        if res: res = round(res, 2)
         levels_txt = f"🛡️ Destek: `{supp}`\n🚧 Direnç: `{res}`" if supp else "Hesaplanamadı"
+        
+        # YENİ: Formasyon ve Hacim Mesajı
+        candle_msg = ""
+        if analysis['candle']:
+            candle_msg = f"\n🕯️ *FORMASYON:* `{analysis['candle']}`"
+        
+        whale_msg = ""
+        if analysis['whale']:
+            whale_msg = f"\n🐋 *HACİM UYARISI:* `{analysis['whale']}`"
 
         message = (
             f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({interval})\n"
@@ -94,10 +105,12 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             f"🌍 *GENEL TREND ({macro_interval}):*\n"
             f"Yön: `{analysis['mtf']['label']}`\n"
-            f"{div_msg}\n"
+            f"{div_msg}"
             
-            f"🏗️ *FİYAT YAPISI (50 Mum):*\n"
-            f"{levels_txt}\n\n"
+            f"\n🏗️ *FİYAT YAPISI (50 Mum):*\n"
+            f"{levels_txt}"
+            f"{candle_msg}"
+            f"{whale_msg}\n\n"
             
             f"📐 *TEKNİK GÖSTERGELER:*\n"
             f"RSI: `{analysis['rsi']}`\n"
@@ -107,7 +120,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             f"🛡️ *PLAN (ATR):*\n"
             f"🛑 Stop: `{analysis['stop_loss']}`\n"
-            f"🎯 Hedef: `{analysis['take_profit']}`\n"
+            f"🎯 Hedef: `{analysis['take_profit']}`"
         )
         
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)

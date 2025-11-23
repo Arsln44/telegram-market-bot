@@ -164,133 +164,116 @@ class AnalysisService:
     
     @staticmethod
     def calculate_technical_signals(df: pd.DataFrame, macro_df: pd.DataFrame = None):
-        if df is None or df.empty:
-            return None
+        if df is None or df.empty: return None
 
         try:
-            # --- 1. Temel Hesaplamalar ---
-            current_price = float(df["Close"].iloc[-1])
+            # --- 1. Veri Hazırlığı ---
+            current_row = df.iloc[-1]
+            current_price = float(current_row["Close"])
             
-            rsi_ind = RSIIndicator(close=df["Close"], window=14)
-            current_rsi = float(rsi_ind.rsi().iloc[-1])
-
+            # İndikatörler
+            rsi = float(RSIIndicator(close=df["Close"], window=14).rsi().iloc[-1])
+            
             macd_ind = MACD(close=df["Close"])
-            current_macd = float(macd_ind.macd().iloc[-1])
-            current_signal = float(macd_ind.macd_signal().iloc[-1])
-
+            macd = float(macd_ind.macd().iloc[-1])
+            signal = float(macd_ind.macd_signal().iloc[-1])
+            
             bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
-            bb_upper = float(bb.bollinger_hband().iloc[-1])
             bb_lower = float(bb.bollinger_lband().iloc[-1])
-
-            atr = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range().iloc[-1]
+            bb_upper = float(bb.bollinger_hband().iloc[-1])
             
-            # SMA 50 (Mean Reversion için)
+            atr = float(AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range().iloc[-1])
             sma50 = SMAIndicator(close=df["Close"], window=50).sma_indicator().iloc[-1]
-
-            # OBV
+            
             obv_ind = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"])
-            obv = obv_ind.on_balance_volume()
-            obv_trend = "Nötr"
-            if len(obv) >= 5:
-                obv_trend = "Artıyor 🟢" if obv.iloc[-1] > obv.iloc[-5] else "Azalıyor 🔴"
+            obv_curr = obv_ind.on_balance_volume().iloc[-1]
+            obv_prev = obv_ind.on_balance_volume().iloc[-5]
+            obv_trend = "Artıyor 🟢" if obv_curr > obv_prev else "Azalıyor 🔴"
 
-            # --- 2. Gelişmiş Analizler ---
-            
-            # Divergence
+            # --- 2. Özel Analizler ---
+            # a) Divergence
             div_label, div_desc = AnalysisService.detect_rsi_divergence(df)
-            
-            # MTF Trend
+            # b) MTF
             mtf_label, mtf_desc = "Yok", "-"
             if macro_df is not None:
                 mtf_label, mtf_desc = AnalysisService.calculate_mtf_trend(macro_df)
-
-            # YENİ: Destek / Direnç
-            support, resistance = AnalysisService._calculate_support_resistance(df)
-            
-            # YENİ: Ortalamadan Sapma (Mean Reversion)
+            # c) Levels
+            supp, res = AnalysisService._calculate_support_resistance(df)
+            # d) Mean Reversion
             mr_status = AnalysisService._check_mean_reversion(current_price, sma50)
+            # e) YENİ: Whale & Candle
+            whale_signal = AnalysisService._detect_whale_volume(df)
+            candle_pattern = AnalysisService._analyze_candlestick_pattern(current_row)
 
             # --- 3. Puanlama Motoru ---
             score = 0
             details = []
             
             # RSI
-            if current_rsi < 30: 
-                score += 2
-                details.append("RSI: Dip Bölge (30 altı)")
-            elif current_rsi > 70: 
-                score -= 2
-                details.append("RSI: Tepe Bölge (70 üstü)")
-                
-            # MACD
-            if current_macd > current_signal:
-                score += 1
-                details.append("MACD: Pozitif Kesişim")
-            else:
-                score -= 1
+            if rsi < 30: score += 2; details.append("RSI: Aşırı Satım (Dip)")
+            elif rsi > 70: score -= 2; details.append("RSI: Aşırı Alım (Tepe)")
             
-            # Bollinger (Bandı delme durumu)
-            if current_price < bb_lower:
-                score += 2
-                details.append("BB: Alt Bandı Deldi (Tepki Beklentisi)")
-            elif current_price > bb_upper:
-                score -= 1 # Sadece eksi yazar, detay yazmaya gerek yok
-
-            # YENİ: Destek/Direnç Yakınlığı
-            if support and resistance:
-                # Desteğe %2 yakınsa AL puanı ekle
-                if abs(current_price - support) / current_price < 0.02:
-                    score += 2
-                    details.append("YAPISAL: Güçlü Desteğe Yakın 🛡️")
-                # Dirence %2 yakınsa SAT puanı ekle
-                elif abs(current_price - resistance) / current_price < 0.02:
-                    score -= 2
-                    details.append("YAPISAL: Güçlü Dirence Yakın 🚧")
-
-            # YENİ: Mean Reversion Etkisi
-            if mr_status:
-                if "Pahalı" in mr_status:
-                    score -= 2 # Trend tersine işlem riski
-                    details.append(f"MR: {mr_status}")
-                elif "Ucuz" in mr_status:
-                    score += 2
-                    details.append(f"MR: {mr_status}")
-
-            # Divergence
+            # MACD
+            if macd > signal: score += 1
+            else: score -= 1
+            
+            # Bollinger
+            if current_price < bb_lower: score += 2; details.append("BB: Alt Bant Delindi")
+            
+            # Yapısal Seviyeler
+            if supp and abs(current_price - supp)/current_price < 0.02:
+                score += 2; details.append("YAPI: Desteğe Yakın 🛡️")
+            elif res and abs(current_price - res)/current_price < 0.02:
+                score -= 2; details.append("YAPI: Dirence Yakın 🚧")
+                
+            # Uyumsuzluk
             if div_label:
-                if "Yükseliş" in div_label:
-                    score += 3
-                    details.append(f"🔥 {div_label}")
-                elif "Düşüş" in div_label:
-                    score -= 3
-                    details.append(f"⚠️ {div_label}")
+                score += 3 if "Yükseliş" in div_label else -3
+                details.append(f"🔥 {div_label}")
 
-            # MTF
-            if "YÜKSELİŞ" in mtf_label and score > 0:
-                score += 1
-                details.append("MTF: Trend Onaylı")
-            elif "DÜŞÜŞ" in mtf_label and score < 0:
-                score -= 1
-                details.append("MTF: Trend Onaylı")
+            # YENİ: Balina Etkisi
+            if whale_signal:
+                # Eğer fiyat artıyorsa ve hacim yüksekse -> Güçlü Al
+                if current_price > df["Open"].iloc[-1]:
+                    score += 2
+                    details.append(f"🐋 HACİM: {whale_signal} (Yükseliş Destekli)")
+                else:
+                    score -= 2
+                    details.append(f"🐋 HACİM: {whale_signal} (Satış Baskısı)")
+
+            # YENİ: Mum Formasyonu (Pinbar)
+            if candle_pattern:
+                if "ÇEKİÇ" in candle_pattern: # Bullish
+                    score += 3 # Dönüş formasyonları güçlüdür
+                    details.append(f"🕯️ {candle_pattern}")
+                elif "SATIŞ" in candle_pattern: # Bearish
+                    score -= 3
+                    details.append(f"🕯️ {candle_pattern}")
+
+            # MTF Trend
+            if "YÜKSELİŞ" in mtf_label and score > 0: score += 1
+            elif "DÜŞÜŞ" in mtf_label and score < 0: score -= 1
 
             # Etiketleme
             risk_label = "NÖTR"
-            if score >= 5: risk_label = "GÜÇLÜ AL 🚀"
+            if score >= 6: risk_label = "GÜÇLÜ AL 🚀" # Eşik yükseldi çünkü çok faktör var
             elif score >= 2: risk_label = "AL 📈"
-            elif score <= -5: risk_label = "GÜÇLÜ SAT 🛑"
+            elif score <= -6: risk_label = "GÜÇLÜ SAT 🛑"
             elif score <= -2: risk_label = "SAT 📉"
 
             return {
                 "score": score,
                 "risk_label": risk_label,
-                "rsi": round(current_rsi, 2),
+                "rsi": round(rsi, 2),
                 "details": details,
                 "obv_trend": obv_trend,
                 "stop_loss": round(current_price - 2 * atr, 4),
                 "take_profit": round(current_price + 3 * atr, 4),
                 "divergence": {"label": div_label, "desc": div_desc},
                 "mtf": {"label": mtf_label, "desc": mtf_desc},
-                "levels": {"support": support, "resistance": resistance} # YENİ VERİ
+                "levels": {"support": supp, "resistance": res},
+                "whale": whale_signal,      # Yeni Veri
+                "candle": candle_pattern    # Yeni Veri
             }
 
         except Exception as e:
@@ -369,4 +352,54 @@ class AnalysisService:
             return "Aşırı Pahalı (Düzeltme Riski) ⚠️"
         elif diff_pct < -0.15:
             return "Aşırı Ucuz (Tepki Gelebilir) 🛒"
+        return None
+    
+    @staticmethod
+    def _detect_whale_volume(df: pd.DataFrame):
+        """
+        Son mumdaki hacmi, ortalama hacimle kıyaslar.
+        """
+        if len(df) < 20: return None
+        
+        current_vol = df["Volume"].iloc[-1]
+        avg_vol = df["Volume"].iloc[-21:-1].mean() # Son mum hariç ortalama
+        
+        if avg_vol == 0: return None
+        
+        ratio = current_vol / avg_vol
+        
+        if ratio >= 3.0:
+            return "ULTRA YÜKSEK (Balina 🐋)"
+        elif ratio >= 2.0:
+            return "YÜKSEK (Dikkat) 🔥"
+        return None
+
+    @staticmethod
+    def _analyze_candlestick_pattern(row):
+        """
+        Tek mum formasyonu analizi (Pinbar / Rejection).
+        Stop avı ve dönüşleri yakalar.
+        """
+        open_p = row["Open"]
+        close_p = row["Close"]
+        high_p = row["High"]
+        low_p = row["Low"]
+        
+        body = abs(close_p - open_p)
+        upper_wick = high_p - max(open_p, close_p)
+        lower_wick = min(open_p, close_p) - low_p
+        
+        # Gövde çok küçükse (Doji ihtimali) fitil hassasiyetini artır
+        min_body = max(body, 0.0001) 
+        
+        # Bullish Pinbar (Aşağıdan Reddedilme / Stop Avı)
+        # Alt fitil, gövdenin en az 2 katı olmalı ve üst fitilden uzun olmalı
+        if lower_wick > (2 * min_body) and lower_wick > (1.5 * upper_wick):
+            return "ÇEKİÇ / DİP OLUŞUMU (Bullish Pinbar) 🔨"
+            
+        # Bearish Pinbar (Yukarıdan Reddedilme / Satış Baskısı)
+        # Üst fitil, gövdenin en az 2 katı olmalı
+        if upper_wick > (2 * min_body) and upper_wick > (1.5 * lower_wick):
+            return "TERS ÇEKİÇ / SATIŞ BASKISI (Bearish Pinbar) 📌"
+            
         return None
