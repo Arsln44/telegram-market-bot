@@ -37,84 +37,74 @@ async def get_price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=f"❌ *{symbol}* bulunamadı veya veri çekilemedi.", parse_mode=ParseMode.MARKDOWN)
 
 async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /analiz <SYMBOL> [<interval>]
-    interval örnekleri: 1d (günlük, default), 1h (60m), 15m (15m), 5m
-    """
     if not context.args:
-        await update.message.reply_text("⚠️ Örn: `/analiz THYAO 1d` veya `/analiz BTC-USD 60m`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("⚠️ Örn: `/analiz THYAO 1h`", parse_mode=ParseMode.MARKDOWN)
         return
 
     symbol = context.args[0].upper()
-    interval = "1d"  # default
-    if len(context.args) > 1:
-        interval = context.args[1]
+    interval = context.args[1] if len(context.args) > 1 else "1d"
+    
+    # 1. Macro Periyodu Belirle
+    macro_interval = MarketDataService.get_macro_interval(interval)
+    
+    wait_msg = await update.message.reply_text(
+        f"🔍 *{symbol}* analiz ediliyor...\n"
+        f"⏱️ Periyot: {interval} | 🌍 Trend: {macro_interval}", 
+        parse_mode=ParseMode.MARKDOWN
+    )
 
-    # Basit interval -> yf interval dönüşümü (kendi ihtiyacına göre genişlet)
-    # yfinance expects interval like "1d", "60m", "15m"
-    yf_interval = interval
-    # Period seçimi: interval'e göre mantıklı bir period seçelim
-    if yf_interval.endswith("m"):
-        # intraday => 30 günlük geçmiş yeterli olabilir
-        period = "30d"
-    elif yf_interval.endswith("h"):
-        period = "90d"
-    else:
-        period = "1y"
+    # Period ayarlamaları (Veri çekme optimizasyonu)
+    # yfinance period formatları: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
+    period_mapping = {
+        "1m": "5d", "5m": "5d", "15m": "1mo", "30m": "1mo",
+        "1h": "6mo", "4h": "1y", "1d": "2y", "1wk": "5y"
+    }
+    period = period_mapping.get(interval, "1y")
+    macro_period = period_mapping.get(macro_interval, "2y")
 
-    wait_msg = await update.message.reply_text(f"🔍 *{symbol}* analiz ediliyor ({yf_interval})...", parse_mode=ParseMode.MARKDOWN)
-
-    # Hisse verisi
-    stock_df = MarketDataService.get_historical_data(symbol, period=period, interval=yf_interval)
-
-    # Endeks/piyasa için konjonktür (BIST 100 veya BTC)
-    is_crypto = "-" in symbol or "USD" in symbol
-    market_index_symbol = "BTC-USD" if is_crypto else "XU100.IS"
-    market_name = "BITCOIN" if is_crypto else "BIST 100"
-    market_df = MarketDataService.get_historical_data(market_index_symbol, period=period, interval=yf_interval)
+    # 2. Verileri Çek (Parallel yapılabilir ama şimdilik sıralı yeterli)
+    stock_df = MarketDataService.get_historical_data(symbol, period=period, interval=interval)
+    macro_df = MarketDataService.get_historical_data(symbol, period=macro_period, interval=macro_interval)
 
     if stock_df is None:
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Hisse verisi çekilemedi veya yetersiz veri.")
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Veri alınamadı.")
         return
 
-    stock_analysis = AnalysisService.calculate_technical_signals(stock_df, volatility_sensitive=True)
-    market_status, market_comment = AnalysisService.analyze_market_health(market_df)
+    # 3. Analizi Başlat (Macro veriyi de gönderiyoruz)
+    analysis = AnalysisService.calculate_technical_signals(stock_df, macro_df=macro_df)
     price_info = MarketDataService.get_stock_price(symbol)
 
-    if stock_analysis and price_info:
-        details_text = "\n".join([f"• {item}" for item in stock_analysis["details"]])
-        vol = stock_analysis["volatility"]
-        market_emoji = "✅" if "POZİTİF" in market_status else "⚠️"
-
-        # Risk uyarıları
-        extra_warn = ""
-        if vol["label"] == "Yüksek":
-            extra_warn = "\n⚠️ *Volatilite yüksek!* Bant sinyallerine daha az güven. Yakından izle."
-
-        # Stop-loss bilgisi
-        sl = stock_analysis.get("stop_loss")
-        tp = stock_analysis.get("take_profit")
-        sl_text = f"\nStop-loss önerisi: `{sl}`" if sl else ""
-        tp_text = f" / Take-profit: `{tp}`" if tp else ""
+    if analysis and price_info:
+        # Detay listesini madde imiyle birleştir
+        details_text = "\n".join([f"• {d}" for d in analysis['details']]) if analysis['details'] else "• Belirgin sinyal yok."
+        
+        # Divergence Mesajı (Varsa)
+        div_msg = ""
+        if analysis['divergence']['label']:
+            div_msg = f"\n📢 *UYUMSUZLUK VAR:*\nSinyal: `{analysis['divergence']['label']}`\nDurum: _{analysis['divergence']['desc']}_\n"
 
         message = (
-            f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({yf_interval})\n"
-            f"💰 Fiyat: `{price_info['price']} {price_info['currency']}`\n\n"
-            f"🌍 *PİYASA ORTAMI ({market_name}):*\n"
-            f"Durum: `{market_status}`\n"
-            f"Yorum: _{market_comment}_\n\n"
-            f"🔍 *HİSSE TEKNİK GÖRÜNÜMÜ:*\n"
-            f"Skor: `{stock_analysis['score']} `\n"
-            f"Sinyal: *{stock_analysis['risk_label']}*\n"
-            f"📈 RSI: `{stock_analysis['rsi']}`\n"
-            f"📊 Hacim Trendi: `{stock_analysis['obv_trend']}`\n"
-            f"📉 Volatilite: `{vol['label']}` (std: `{vol['pct_std']}`, ATR: `{vol['atr']}`)\n\n"
-            f"*Detaylar:*\n{details_text}"
-            f"{extra_warn}\n\n"
-            f"{sl_text}{tp_text}\n\n"
-            f"_Not: Bu bir yatırım tavsiyesi değildir. Stop-loss ATR tabanlı öneridir, pozisyon boyutunu piyasa koşullarına göre ayarla._"
+            f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({interval})\n"
+            f"💰 Fiyat: `{price_info['price']} {price_info['currency']}`\n"
+            f"🏆 Skor: `{analysis['score']}` | Sinyal: *{analysis['risk_label']}*\n\n"
+            
+            f"🌍 *GENEL TREND ({macro_interval}):*\n"
+            f"Yön: `{analysis['mtf']['label']}`\n"
+            f"Durum: _{analysis['mtf']['desc']}_\n"
+            f"{div_msg}\n"
+            
+            f"📐 *TEKNİK GÖSTERGELER:*\n"
+            f"RSI: `{analysis['rsi']}`\n"
+            f"Hacim Trendi: `{analysis['obv_trend']}`\n\n"
+            
+            f"📋 *DETAYLAR:*\n{details_text}\n\n"
+            
+            f"🛡️ *TİCARET PLANLAMASI (ATR)*\n"
+            f"🛑 Stop: `{analysis['stop_loss']}`\n"
+            f"🎯 Hedef: `{analysis['take_profit']}`\n\n"
+            f"_YTD. Bot teknik verilerle hesaplama yapar._"
         )
-
+        
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)
     else:
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Analiz yapılamadı veya eksik veri.")
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Analiz hatası.")

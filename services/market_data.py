@@ -79,3 +79,22 @@ class MarketDataService:
         except Exception as e:
             print(f"[MarketDataService.get_historical_data] Hata: {e}")
             return None
+        
+    @staticmethod
+    def get_macro_interval(micro_interval: str) -> str:
+        """
+        Seçilen zaman dilimine göre bir üst (trend) zaman dilimini belirler.
+        MTF Analizi için kritiktir.
+        """
+        mapping = {
+            "1m": "15m",
+            "5m": "15m",
+            "15m": "1h",
+            "30m": "4h",
+            "60m": "1d",
+            "1h": "1d",
+            "4h": "1wk",
+            "1d": "1wk",
+            "1wk": "1mo"
+        }
+        return mapping.get(micro_interval, "1d")
