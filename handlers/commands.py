@@ -1,3 +1,4 @@
+# handlers/commands.py
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -5,38 +6,25 @@ from services.market_data import MarketDataService
 from services.analysis_service import AnalysisService
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /start komutu geldiğinde çalışır """
     user_first_name = update.effective_user.first_name
-    
     await update.message.reply_text(
         f"Selam {user_first_name}! 👋\n"
-        "Ben Borsa Takip Asistanı.\n\n"
-        "📊 **Kullanabileceğin Komutlar:**\n\n"
-        "1️⃣ **Fiyat Sorgulama:**\n"
-        "`/fiyat <KOD>` -> Anlık fiyatı getirir.\n"
-        "Örn: `/fiyat THYAO`\n\n"
-        "2️⃣ **Teknik Analiz (RSI):**\n"
-        "`/analiz <KOD>` -> Al/Sat sinyal durumunu ölçer.\n"
-        "Örn: `/analiz ASELS`\n\n"
-        "Kripto paralar için: `/analiz BTC-USD` gibi kullanabilirsin.",
+        "Borsa Takip Asistanı hazırım.\n\n"
+        "📊 Komutlar:\n"
+        "`/fiyat <KOD>` -> Anlık fiyat\n"
+        "`/analiz <KOD> [<interval>]` -> Teknik analiz. Interval örn: 1d, 1h, 15m\n"
+        "Örn: `/analiz THYAO 1d` veya `/analiz BTC-USD 60m`",
         parse_mode=ParseMode.MARKDOWN
     )
 
 async def get_price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /fiyat <SEMBOL> komutunu işler """
-    
-    # Kullanıcı sadece /fiyat yazıp hisse adı yazmadıysa uyar
     if not context.args:
         await update.message.reply_text("⚠️ Lütfen bir hisse kodu girin.\nÖrn: `/fiyat GARAN`", parse_mode=ParseMode.MARKDOWN)
         return
 
-    symbol = context.args[0] # İlk parametreyi al
-    
-    # Kullanıcıya "işlem yapılıyor" mesajı at (UX için önemli)
+    symbol = context.args[0]
     wait_msg = await update.message.reply_text(f"🔍 *{symbol.upper()}* verileri çekiliyor...", parse_mode=ParseMode.MARKDOWN)
 
-    # Servisi çağır (Bloke etmemesi için burada basit çağırıyoruz, 
-    # ileride daha complex işlemlerde thread kullanacağız)
     result = MarketDataService.get_stock_price(symbol)
 
     if result:
@@ -44,67 +32,89 @@ async def get_price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📈 *{result['symbol']}*\n"
             f"💰 Fiyat: `{result['price']} {result['currency']}`"
         )
-        # Bekleme mesajını silmek yerine editle (Daha profesyonel durur)
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, 
-            message_id=wait_msg.message_id, 
-            text=message, 
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)
     else:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, 
-            message_id=wait_msg.message_id, 
-            text=f"❌ *{symbol}* bulunamadı veya veri çekilemedi.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=f"❌ *{symbol}* bulunamadı veya veri çekilemedi.", parse_mode=ParseMode.MARKDOWN)
 
 async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ /analiz <SEMBOL> komutunu işler """
-    
+    """
+    /analiz <SYMBOL> [<interval>]
+    interval örnekleri: 1d (günlük, default), 1h (60m), 15m (15m), 5m
+    """
     if not context.args:
-        await update.message.reply_text("⚠️ Lütfen hisse kodu girin.\nÖrn: `/analiz THYAO`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text("⚠️ Örn: `/analiz THYAO 1d` veya `/analiz BTC-USD 60m`", parse_mode=ParseMode.MARKDOWN)
         return
 
-    symbol = context.args[0]
-    wait_msg = await update.message.reply_text(f"⚙️ *{symbol.upper()}* teknik analizi yapılıyor...", parse_mode=ParseMode.MARKDOWN)
+    symbol = context.args[0].upper()
+    interval = "1d"  # default
+    if len(context.args) > 1:
+        interval = context.args[1]
 
-    # 1. Adım: Veriyi Çek
-    df = MarketDataService.get_historical_data(symbol)
-    
-    if df is None:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, 
-            message_id=wait_msg.message_id, 
-            text="❌ Yeterli veri bulunamadı.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    # Basit interval -> yf interval dönüşümü (kendi ihtiyacına göre genişlet)
+    # yfinance expects interval like "1d", "60m", "15m"
+    yf_interval = interval
+    # Period seçimi: interval'e göre mantıklı bir period seçelim
+    if yf_interval.endswith("m"):
+        # intraday => 30 günlük geçmiş yeterli olabilir
+        period = "30d"
+    elif yf_interval.endswith("h"):
+        period = "90d"
+    else:
+        period = "1y"
+
+    wait_msg = await update.message.reply_text(f"🔍 *{symbol}* analiz ediliyor ({yf_interval})...", parse_mode=ParseMode.MARKDOWN)
+
+    # Hisse verisi
+    stock_df = MarketDataService.get_historical_data(symbol, period=period, interval=yf_interval)
+
+    # Endeks/piyasa için konjonktür (BIST 100 veya BTC)
+    is_crypto = "-" in symbol or "USD" in symbol
+    market_index_symbol = "BTC-USD" if is_crypto else "XU100.IS"
+    market_name = "BITCOIN" if is_crypto else "BIST 100"
+    market_df = MarketDataService.get_historical_data(market_index_symbol, period=period, interval=yf_interval)
+
+    if stock_df is None:
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Hisse verisi çekilemedi veya yetersiz veri.")
         return
 
-    # 2. Adım: Analiz Et
-    rsi_result = AnalysisService.calculate_rsi(df)
-    
-    # Anlık fiyatı da alalım ki rapor tam olsun
+    stock_analysis = AnalysisService.calculate_technical_signals(stock_df, volatility_sensitive=True)
+    market_status, market_comment = AnalysisService.analyze_market_health(market_df)
     price_info = MarketDataService.get_stock_price(symbol)
 
-    if rsi_result and price_info:
+    if stock_analysis and price_info:
+        details_text = "\n".join([f"• {item}" for item in stock_analysis["details"]])
+        vol = stock_analysis["volatility"]
+        market_emoji = "✅" if "POZİTİF" in market_status else "⚠️"
+
+        # Risk uyarıları
+        extra_warn = ""
+        if vol["label"] == "Yüksek":
+            extra_warn = "\n⚠️ *Volatilite yüksek!* Bant sinyallerine daha az güven. Yakından izle."
+
+        # Stop-loss bilgisi
+        sl = stock_analysis.get("stop_loss")
+        tp = stock_analysis.get("take_profit")
+        sl_text = f"\nStop-loss önerisi: `{sl}`" if sl else ""
+        tp_text = f" / Take-profit: `{tp}`" if tp else ""
+
         message = (
-            f"📊 **Teknik Analiz Raporu: {price_info['symbol']}**\n\n"
-            f"💰 **Fiyat:** {price_info['price']} {price_info['currency']}\n"
-            f"📉 **RSI (14):** `{rsi_result['value']}`\n"
-            f"b **Sinyal:** {rsi_result['signal']}\n\n"
-            "_Not: Bu bir yatırım tavsiyesi değildir._"
+            f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({yf_interval})\n"
+            f"💰 Fiyat: `{price_info['price']} {price_info['currency']}`\n\n"
+            f"🌍 *PİYASA ORTAMI ({market_name}):*\n"
+            f"Durum: `{market_status}`\n"
+            f"Yorum: _{market_comment}_\n\n"
+            f"🔍 *HİSSE TEKNİK GÖRÜNÜMÜ:*\n"
+            f"Skor: `{stock_analysis['score']} `\n"
+            f"Sinyal: *{stock_analysis['risk_label']}*\n"
+            f"📈 RSI: `{stock_analysis['rsi']}`\n"
+            f"📊 Hacim Trendi: `{stock_analysis['obv_trend']}`\n"
+            f"📉 Volatilite: `{vol['label']}` (std: `{vol['pct_std']}`, ATR: `{vol['atr']}`)\n\n"
+            f"*Detaylar:*\n{details_text}"
+            f"{extra_warn}\n\n"
+            f"{sl_text}{tp_text}\n\n"
+            f"_Not: Bu bir yatırım tavsiyesi değildir. Stop-loss ATR tabanlı öneridir, pozisyon boyutunu piyasa koşullarına göre ayarla._"
         )
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, 
-            message_id=wait_msg.message_id, 
-            text=message, 
-            parse_mode=ParseMode.MARKDOWN
-        )
+
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)
     else:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, 
-            message_id=wait_msg.message_id, 
-            text="❌ Analiz sırasında bir hata oluştu.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Analiz yapılamadı veya eksik veri.")
