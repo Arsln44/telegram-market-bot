@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes
 from services.market_data import MarketDataService
 from services.analysis_service import AnalysisService
 from services.chart_service import ChartService
+from services.ai_service import AIService
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_first_name = update.effective_user.first_name
@@ -97,6 +98,13 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Risk Verileri
         risk_data = analysis['risk_data']
         rr_emoji = "✅" if risk_data['rr_ratio'] >= 1.5 else "⚠️"
+
+        analysis['price'] = price_info['price']
+        ai_comment = AIService.generate_market_comment(symbol, analysis)
+        
+        ai_text_block = ""
+        if ai_comment:
+            ai_text_block = f"\n🤖 *AI YORUMU (GEMINI):*\n_{ai_comment}_\n"
         
         message = (
             f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({interval})\n"
@@ -116,6 +124,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"RSI: `{analysis['rsi']}`\n"
             f"Hacim Trendi: `{analysis['obv_trend']}`\n\n"
             
+            f"{ai_text_block}\n"
             f"📋 *DETAYLAR:*\n{details_text}\n\n"
             
             f"⚖️ *RİSK YÖNETİMİ:*\n"
