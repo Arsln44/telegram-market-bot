@@ -4,6 +4,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 from services.market_data import MarketDataService
 from services.analysis_service import AnalysisService
+from services.chart_service import ChartService
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_first_name = update.effective_user.first_name
@@ -124,6 +125,27 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"_💡 1000 TL risk için: {risk_data['qty_for_1k_risk']} adet_"
         )
         
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text="❌ Analiz hatası.")
+        # 1. Önce Raporu Güncelle (Metin Olarak)
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id, 
+            message_id=wait_msg.message_id, 
+            text=message, 
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+        # 2. Grafiği Oluştur ve Gönder
+        chart_buf = ChartService.create_chart(
+            stock_df, 
+            symbol, 
+            support=analysis['levels']['support'], 
+            resistance=analysis['levels']['resistance']
+        )
+
+        if chart_buf:
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=chart_buf,
+                caption=f"📈 *{symbol}* Teknik Görünüm (Sarı: SMA50 | Mavi: Destek | Turuncu: Direnç)",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            chart_buf.close() # Belleği temizle
