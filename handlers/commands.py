@@ -89,15 +89,14 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if res: res = round(res, 2)
         levels_txt = f"🛡️ Destek: `{supp}`\n🚧 Direnç: `{res}`" if supp else "Hesaplanamadı"
         
-        # YENİ: Formasyon ve Hacim Mesajı
-        candle_msg = ""
-        if analysis['candle']:
-            candle_msg = f"\n🕯️ *FORMASYON:* `{analysis['candle']}`"
-        
-        whale_msg = ""
-        if analysis['whale']:
-            whale_msg = f"\n🐋 *HACİM UYARISI:* `{analysis['whale']}`"
+        # Ekstra Mesajlar
+        candle_msg = f"\n🕯️ *FORMASYON:* `{analysis['candle']}`" if analysis['candle'] else ""
+        whale_msg = f"\n🐋 *HACİM UYARISI:* `{analysis['whale']}`" if analysis['whale'] else ""
 
+        # Risk Verileri
+        risk_data = analysis['risk_data']
+        rr_emoji = "✅" if risk_data['rr_ratio'] >= 1.5 else "⚠️"
+        
         message = (
             f"📊 *{price_info['symbol']} ANALİZ RAPORU* ({interval})\n"
             f"💰 Fiyat: `{price_info['price']} {price_info['currency']}`\n"
@@ -118,9 +117,11 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             f"📋 *DETAYLAR:*\n{details_text}\n\n"
             
-            f"🛡️ *PLAN (ATR):*\n"
-            f"🛑 Stop: `{analysis['stop_loss']}`\n"
-            f"🎯 Hedef: `{analysis['take_profit']}`"
+            f"⚖️ *RİSK YÖNETİMİ:*\n"
+            f"Stop: `{analysis['stop_loss']}`\n"
+            f"Hedef: `{analysis['take_profit']}`\n"
+            f"R/R Oranı: `{risk_data['rr_ratio']}` {rr_emoji}\n"
+            f"_💡 1000 TL risk için: {risk_data['qty_for_1k_risk']} adet_"
         )
         
         await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=wait_msg.message_id, text=message, parse_mode=ParseMode.MARKDOWN)

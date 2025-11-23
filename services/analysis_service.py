@@ -180,7 +180,6 @@ class AnalysisService:
             
             bb = BollingerBands(close=df["Close"], window=20, window_dev=2)
             bb_lower = float(bb.bollinger_lband().iloc[-1])
-            bb_upper = float(bb.bollinger_hband().iloc[-1])
             
             atr = float(AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range().iloc[-1])
             sma50 = SMAIndicator(close=df["Close"], window=50).sma_indicator().iloc[-1]
@@ -191,72 +190,75 @@ class AnalysisService:
             obv_trend = "Artıyor 🟢" if obv_curr > obv_prev else "Azalıyor 🔴"
 
             # --- 2. Özel Analizler ---
-            # a) Divergence
             div_label, div_desc = AnalysisService.detect_rsi_divergence(df)
-            # b) MTF
+            
             mtf_label, mtf_desc = "Yok", "-"
             if macro_df is not None:
                 mtf_label, mtf_desc = AnalysisService.calculate_mtf_trend(macro_df)
-            # c) Levels
+                
             supp, res = AnalysisService._calculate_support_resistance(df)
-            # d) Mean Reversion
             mr_status = AnalysisService._check_mean_reversion(current_price, sma50)
-            # e) YENİ: Whale & Candle
             whale_signal = AnalysisService._detect_whale_volume(df)
             candle_pattern = AnalysisService._analyze_candlestick_pattern(current_row)
 
-            # --- 3. Puanlama Motoru ---
+            # --- 3. Risk Yönetimi (YENİ) ---
+            stop_loss = round(current_price - 2 * atr, 4)
+            take_profit = round(current_price + 3 * atr, 4)
+            
+            # Risk/Reward Hesaplama
+            risk_per_share = current_price - stop_loss
+            reward_per_share = take_profit - current_price
+            
+            rr_ratio = 0.0
+            if risk_per_share > 0:
+                rr_ratio = round(reward_per_share / risk_per_share, 2)
+            
+            # Pozisyon Büyüklüğü (Örnek: 1000 TL Risk için)
+            # Kaç adet alırsam ve stop olursam tam 1000 TL kaybederim?
+            qty_suggestion = 0
+            if risk_per_share > 0:
+                qty_suggestion = int(1000 / risk_per_share)
+
+            # --- 4. Puanlama Motoru ---
             score = 0
             details = []
             
-            # RSI
+            # İndikatör Puanları
             if rsi < 30: score += 2; details.append("RSI: Aşırı Satım (Dip)")
             elif rsi > 70: score -= 2; details.append("RSI: Aşırı Alım (Tepe)")
             
-            # MACD
             if macd > signal: score += 1
             else: score -= 1
             
-            # Bollinger
             if current_price < bb_lower: score += 2; details.append("BB: Alt Bant Delindi")
             
-            # Yapısal Seviyeler
             if supp and abs(current_price - supp)/current_price < 0.02:
                 score += 2; details.append("YAPI: Desteğe Yakın 🛡️")
             elif res and abs(current_price - res)/current_price < 0.02:
                 score -= 2; details.append("YAPI: Dirence Yakın 🚧")
                 
-            # Uyumsuzluk
             if div_label:
                 score += 3 if "Yükseliş" in div_label else -3
                 details.append(f"🔥 {div_label}")
 
-            # YENİ: Balina Etkisi
             if whale_signal:
-                # Eğer fiyat artıyorsa ve hacim yüksekse -> Güçlü Al
-                if current_price > df["Open"].iloc[-1]:
-                    score += 2
-                    details.append(f"🐋 HACİM: {whale_signal} (Yükseliş Destekli)")
-                else:
-                    score -= 2
-                    details.append(f"🐋 HACİM: {whale_signal} (Satış Baskısı)")
+                if current_price > df["Open"].iloc[-1]: score += 2; details.append(f"🐋 HACİM: {whale_signal}")
+                else: score -= 2; details.append(f"🐋 HACİM: {whale_signal}")
 
-            # YENİ: Mum Formasyonu (Pinbar)
             if candle_pattern:
-                if "ÇEKİÇ" in candle_pattern: # Bullish
-                    score += 3 # Dönüş formasyonları güçlüdür
-                    details.append(f"🕯️ {candle_pattern}")
-                elif "SATIŞ" in candle_pattern: # Bearish
-                    score -= 3
-                    details.append(f"🕯️ {candle_pattern}")
+                if "ÇEKİÇ" in candle_pattern: score += 3; details.append(f"🕯️ {candle_pattern}")
+                elif "SATIŞ" in candle_pattern: score -= 3; details.append(f"🕯️ {candle_pattern}")
 
-            # MTF Trend
             if "YÜKSELİŞ" in mtf_label and score > 0: score += 1
             elif "DÜŞÜŞ" in mtf_label and score < 0: score -= 1
+            
+            # R:R Filtresi (Puan Kırma)
+            if rr_ratio < 1.5 and score > 0:
+                score -= 2
+                details.append("RİSK: R/R Oranı Düşük (Verimsiz)")
 
-            # Etiketleme
             risk_label = "NÖTR"
-            if score >= 6: risk_label = "GÜÇLÜ AL 🚀" # Eşik yükseldi çünkü çok faktör var
+            if score >= 6: risk_label = "GÜÇLÜ AL 🚀"
             elif score >= 2: risk_label = "AL 📈"
             elif score <= -6: risk_label = "GÜÇLÜ SAT 🛑"
             elif score <= -2: risk_label = "SAT 📉"
@@ -267,13 +269,18 @@ class AnalysisService:
                 "rsi": round(rsi, 2),
                 "details": details,
                 "obv_trend": obv_trend,
-                "stop_loss": round(current_price - 2 * atr, 4),
-                "take_profit": round(current_price + 3 * atr, 4),
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
                 "divergence": {"label": div_label, "desc": div_desc},
                 "mtf": {"label": mtf_label, "desc": mtf_desc},
                 "levels": {"support": supp, "resistance": res},
-                "whale": whale_signal,      # Yeni Veri
-                "candle": candle_pattern    # Yeni Veri
+                "whale": whale_signal,
+                "candle": candle_pattern,
+                "risk_data": { # YENİ VERİ
+                    "rr_ratio": rr_ratio,
+                    "risk_per_share": round(risk_per_share, 4),
+                    "qty_for_1k_risk": qty_suggestion
+                }
             }
 
         except Exception as e:
